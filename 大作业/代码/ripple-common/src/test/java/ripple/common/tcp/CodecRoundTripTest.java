@@ -1,0 +1,335 @@
+// Copyright (c) 2023 Institute of Software, Chinese Academy of Sciences
+// Ripple is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//          http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+// EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+// MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
+package ripple.common.tcp;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.junit.Test;
+import ripple.common.entity.Constants;
+import ripple.common.helper.TypeHelper;
+import ripple.common.tcp.decoder.DeleteRequestDecoder;
+import ripple.common.tcp.decoder.HeartbeatRequestDecoder;
+import ripple.common.tcp.decoder.HeartbeatResponseDecoder;
+import ripple.common.tcp.decoder.PutRequestDecoder;
+import ripple.common.tcp.decoder.PutResponseDecoder;
+import ripple.common.tcp.decoder.SubscribeRequestDecoder;
+import ripple.common.tcp.decoder.SyncRequestDecoder;
+import ripple.common.tcp.decoder.SyncResponseDecoder;
+import ripple.common.tcp.decoder.SystemInfoResponseDecoder;
+import ripple.common.tcp.encoder.DeleteRequestEncoder;
+import ripple.common.tcp.encoder.HeartbeatRequestEncoder;
+import ripple.common.tcp.encoder.HeartbeatResponseEncoder;
+import ripple.common.tcp.encoder.PutRequestEncoder;
+import ripple.common.tcp.encoder.PutResponseEncoder;
+import ripple.common.tcp.encoder.SubscribeRequestEncoder;
+import ripple.common.tcp.encoder.SyncRequestEncoder;
+import ripple.common.tcp.encoder.SyncResponseEncoder;
+import ripple.common.tcp.encoder.SystemInfoResponseEncoder;
+import ripple.common.tcp.message.DeleteRequest;
+import ripple.common.tcp.message.HeartbeatRequest;
+import ripple.common.tcp.message.HeartbeatResponse;
+import ripple.common.tcp.message.PutRequest;
+import ripple.common.tcp.message.PutResponse;
+import ripple.common.tcp.message.Result;
+import ripple.common.tcp.message.SubscribeRequest;
+import ripple.common.tcp.message.SyncRequest;
+import ripple.common.tcp.message.SyncResponse;
+import ripple.common.tcp.message.SystemInfoResponse;
+
+import java.util.Date;
+import java.util.UUID;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * 编解码往返测试 + 线格式尺寸契约测试。
+ *
+ * <p>背景：本分支把 UUID 的线上表示从「4 字节长度前缀 + 36 字符 ASCII（40 字节）」
+ * 改为「16 字节二进制」。这带来两个必须守住的性质：</p>
+ * <ol>
+ *   <li>编码后立即解码，所有字段必须原样还原（收发两端对称改动）；</li>
+ *   <li>每条报文的线上字节数必须精确等于约定值（这是带宽收益的来源）。</li>
+ * </ol>
+ *
+ * @author Assignment 1 (B3)
+ */
+public class CodecRoundTripTest {
+
+    private static final UUID UUID_A = UUID.fromString("12345678-1234-5678-1234-567812345678");
+    private static final UUID UUID_B = UUID.fromString("87654321-4321-8765-4321-876543218765");
+    private static final Date LAST_UPDATE = new Date(1700000000000L);
+
+    private static ByteBuf encode(Encoder encoder, Message message) {
+        ByteBuf byteBuf = Unpooled.buffer();
+        encoder.encode(message, byteBuf);
+        return byteBuf;
+    }
+
+    private static Message decode(Decoder decoder, ByteBuf byteBuf, MessageType expectedType) {
+        MessageType messageType = MessageType.get(byteBuf.readByte());
+        assertEquals("报文类型字节", expectedType, messageType);
+        Message message = decoder.decode(byteBuf, messageType);
+        assertEquals("解码后不应有剩余字节（收发两端必须对称）", 0, byteBuf.readableBytes());
+        return message;
+    }
+
+    // ------------------------------------------------------------------
+    // 1. 底层原语
+    // ------------------------------------------------------------------
+
+    @Test
+    public void uuidMustBeSixteenBytes() {
+        ByteBuf byteBuf = Unpooled.buffer();
+        TypeHelper.writeUuid(UUID_A, byteBuf);
+        assertEquals("UUID 线上长度必须是 16 字节", 16, byteBuf.readableBytes());
+
+        UUID decoded = TypeHelper.readUuid(byteBuf);
+        assertEquals(UUID_A, decoded);
+        assertEquals(0, byteBuf.readableBytes());
+    }
+
+    @Test
+    public void uuidMustPreserveAllBits() {
+        UUID allOnes = new UUID(-1L, -1L);
+        ByteBuf byteBuf = Unpooled.buffer();
+        TypeHelper.writeUuid(allOnes, byteBuf);
+        assertEquals(allOnes, TypeHelper.readUuid(byteBuf));
+    }
+
+    @Test
+    public void stringEncodingRoundTrip() {
+        String[] samples = {"", "a", "demo", "中文键值", "emoji-🙂"};
+        for (String sample : samples) {
+            ByteBuf byteBuf = Unpooled.buffer();
+            TypeHelper.writeString(sample, byteBuf);
+            assertEquals(sample, TypeHelper.readString(byteBuf));
+            assertEquals(0, byteBuf.readableBytes());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 2. 报文编解码往返
+    // ------------------------------------------------------------------
+
+    @Test
+    public void putRequestRoundTrip() {
+        PutRequest message = new PutRequest();
+        message.setUuid(UUID_A);
+        message.setApplicationName("demo");
+        message.setKey("hello");
+        message.setValue("world");
+
+        ByteBuf byteBuf = encode(new PutRequestEncoder(), message);
+        PutRequest decoded = (PutRequest) decode(new PutRequestDecoder(), byteBuf, MessageType.PUT_REQUEST);
+
+        assertEquals(UUID_A, decoded.getUuid());
+        assertEquals("demo", decoded.getApplicationName());
+        assertEquals("hello", decoded.getKey());
+        assertEquals("world", decoded.getValue());
+    }
+
+    @Test
+    public void syncRequestUpdateRoundTrip() {
+        SyncRequest message = new SyncRequest();
+        message.setUuid(UUID_A);
+        message.setMessageUuid(UUID_B);
+        message.setOperationType(Constants.MESSAGE_TYPE_UPDATE);
+        message.setApplicationName("demo");
+        message.setKey("hello");
+        message.setValue("world");
+        message.setLastUpdate(LAST_UPDATE);
+        message.setLastUpdateServerId(2);
+        message.setFromId(1);
+
+        ByteBuf byteBuf = encode(new SyncRequestEncoder(), message);
+        SyncRequest decoded = (SyncRequest) decode(new SyncRequestDecoder(), byteBuf, MessageType.SYNC_REQUEST);
+
+        assertEquals(UUID_A, decoded.getUuid());
+        assertEquals(UUID_B, decoded.getMessageUuid());
+        assertEquals(Constants.MESSAGE_TYPE_UPDATE, decoded.getOperationType());
+        assertEquals("demo", decoded.getApplicationName());
+        assertEquals("hello", decoded.getKey());
+        assertEquals("world", decoded.getValue());
+        assertEquals(LAST_UPDATE, decoded.getLastUpdate());
+        assertEquals(2, decoded.getLastUpdateServerId());
+        assertEquals(1, decoded.getFromId());
+    }
+
+    @Test
+    public void syncRequestIncrementalUpdateRoundTrip() {
+        SyncRequest message = new SyncRequest();
+        message.setUuid(UUID_A);
+        message.setMessageUuid(UUID_B);
+        message.setOperationType(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE);
+        message.setApplicationName("demo");
+        message.setKey("list");
+        message.setBaseMessageUuid(UUID_A);
+        message.setAtomicOperation(Constants.ATOMIC_OPERATION_ADD_ENTRY);
+        message.setValue("entry");
+        message.setLastUpdate(LAST_UPDATE);
+        message.setLastUpdateServerId(1);
+        message.setFromId(1);
+
+        ByteBuf byteBuf = encode(new SyncRequestEncoder(), message);
+        SyncRequest decoded = (SyncRequest) decode(new SyncRequestDecoder(), byteBuf, MessageType.SYNC_REQUEST);
+
+        assertEquals(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE, decoded.getOperationType());
+        assertEquals(UUID_A, decoded.getBaseMessageUuid());
+        assertEquals(Constants.ATOMIC_OPERATION_ADD_ENTRY, decoded.getAtomicOperation());
+        assertEquals("entry", decoded.getValue());
+    }
+
+    @Test
+    public void syncResponseRoundTrip() {
+        SyncResponse message = new SyncResponse();
+        message.setUuid(UUID_A);
+        message.setResult(Result.SUCCESS);
+
+        ByteBuf byteBuf = encode(new SyncResponseEncoder(), message);
+        SyncResponse decoded = (SyncResponse) decode(new SyncResponseDecoder(), byteBuf, MessageType.SYNC_RESPONSE);
+
+        assertEquals(UUID_A, decoded.getUuid());
+        assertEquals(Result.SUCCESS, decoded.getResult());
+    }
+
+    @Test
+    public void heartbeatRoundTrip() {
+        HeartbeatRequest request = new HeartbeatRequest();
+        request.setUuid(UUID_A);
+        ByteBuf buf1 = encode(new HeartbeatRequestEncoder(), request);
+        HeartbeatRequest decodedRequest = (HeartbeatRequest) decode(new HeartbeatRequestDecoder(), buf1,
+                MessageType.HEARTBEAT_REQUEST);
+        assertEquals(UUID_A, decodedRequest.getUuid());
+
+        HeartbeatResponse response = new HeartbeatResponse();
+        response.setUuid(UUID_A);
+        ByteBuf buf2 = encode(new HeartbeatResponseEncoder(), response);
+        HeartbeatResponse decodedResponse = (HeartbeatResponse) decode(new HeartbeatResponseDecoder(), buf2,
+                MessageType.HEARTBEAT_RESPONSE);
+        assertEquals(UUID_A, decodedResponse.getUuid());
+    }
+
+    @Test
+    public void subscribeRequestRoundTrip() {
+        SubscribeRequest message = new SubscribeRequest();
+        message.setUuid(UUID_A);
+        message.setApplicationName("demo");
+        message.setKey("hello");
+        message.setCallbackAddress("127.0.0.1");
+        message.setCallbackPort(5001);
+
+        ByteBuf byteBuf = encode(new SubscribeRequestEncoder(), message);
+        SubscribeRequest decoded = (SubscribeRequest) decode(new SubscribeRequestDecoder(), byteBuf,
+                MessageType.SUBSCRIBE_REQUEST);
+
+        assertEquals("demo", decoded.getApplicationName());
+        assertEquals("hello", decoded.getKey());
+        assertEquals("127.0.0.1", decoded.getCallbackAddress());
+        assertEquals(5001, decoded.getCallbackPort());
+    }
+
+    @Test
+    public void systemInfoResponseRoundTrip() {
+        SystemInfoResponse message = new SystemInfoResponse();
+        message.setUuid(UUID_A);
+        message.setCpuUsage(0.5);
+
+        ByteBuf byteBuf = encode(new SystemInfoResponseEncoder(), message);
+        SystemInfoResponse decoded = (SystemInfoResponse) decode(new SystemInfoResponseDecoder(), byteBuf,
+                MessageType.SYSTEM_INFO_RESPONSE);
+
+        assertEquals(UUID_A, decoded.getUuid());
+        assertEquals(0.5, decoded.getCpuUsage(), 1e-9);
+    }
+
+    @Test
+    public void deleteRequestRoundTrip() {
+        DeleteRequest message = new DeleteRequest();
+        message.setUuid(UUID_A);
+        message.setApplicationName("demo");
+        message.setKey("hello");
+
+        ByteBuf byteBuf = encode(new DeleteRequestEncoder(), message);
+        DeleteRequest decoded = (DeleteRequest) decode(new DeleteRequestDecoder(), byteBuf, MessageType.DELETE_REQUEST);
+
+        assertEquals("demo", decoded.getApplicationName());
+        assertEquals("hello", decoded.getKey());
+    }
+
+    // ------------------------------------------------------------------
+    // 3. 线格式尺寸契约（每次改动编码器都必须同步更新这里的数字）
+    // ------------------------------------------------------------------
+    // 尺寸构成：type(1) + UUID(16) + 字符串(4+UTF-8 长度) + int(4) + long(8) + double(8) + byte(1)
+
+    @Test
+    public void wireSizesMustMatchContract() {
+        // PUT_REQUEST: 1 + 16 + (4+4) + (4+5) + (4+5) = 43
+        PutRequest put = new PutRequest();
+        put.setUuid(UUID_A);
+        put.setApplicationName("demo");
+        put.setKey("hello");
+        put.setValue("world");
+        assertEquals(43, encode(new PutRequestEncoder(), put).readableBytes());
+
+        // SYNC_REQUEST(update): 1 + 16*2 + (4+6) + (4+4) + (4+5) + (4+5) + 8 + 4 + 4 = 85
+        SyncRequest sync = new SyncRequest();
+        sync.setUuid(UUID_A);
+        sync.setMessageUuid(UUID_B);
+        sync.setOperationType(Constants.MESSAGE_TYPE_UPDATE);
+        sync.setApplicationName("demo");
+        sync.setKey("hello");
+        sync.setValue("world");
+        sync.setLastUpdate(LAST_UPDATE);
+        sync.setLastUpdateServerId(1);
+        sync.setFromId(1);
+        assertEquals(85, encode(new SyncRequestEncoder(), sync).readableBytes());
+
+        // HEARTBEAT_REQUEST: 1 + 16 = 17
+        HeartbeatRequest heartbeat = new HeartbeatRequest();
+        heartbeat.setUuid(UUID_A);
+        assertEquals(17, encode(new HeartbeatRequestEncoder(), heartbeat).readableBytes());
+
+        // SYNC_RESPONSE: 1 + 16 + 1 = 18
+        SyncResponse syncResponse = new SyncResponse();
+        syncResponse.setUuid(UUID_A);
+        syncResponse.setResult(Result.SUCCESS);
+        assertEquals(18, encode(new SyncResponseEncoder(), syncResponse).readableBytes());
+
+        // SUBSCRIBE_REQUEST: 1 + 16 + (4+4) + (4+5) + (4+9) + 4 = 51
+        SubscribeRequest subscribe = new SubscribeRequest();
+        subscribe.setUuid(UUID_A);
+        subscribe.setApplicationName("demo");
+        subscribe.setKey("hello");
+        subscribe.setCallbackAddress("127.0.0.1");
+        subscribe.setCallbackPort(5001);
+        assertEquals(51, encode(new SubscribeRequestEncoder(), subscribe).readableBytes());
+
+        // SYSTEM_INFO_RESPONSE: 1 + 16 + 8 = 25
+        SystemInfoResponse systemInfo = new SystemInfoResponse();
+        systemInfo.setUuid(UUID_A);
+        systemInfo.setCpuUsage(0.25);
+        assertEquals(25, encode(new SystemInfoResponseEncoder(), systemInfo).readableBytes());
+    }
+
+    @Test
+    public void everyMessageMustCarryExactlyOneTypeByteAndSixteenByteUuids() {
+        // 兜底：任何报文编码后，UUID 部分都必须是 16 字节而不是 40 字节
+        PutRequest put = new PutRequest();
+        put.setUuid(UUID_A);
+        put.setApplicationName("d");
+        put.setKey("k");
+        put.setValue("v");
+        ByteBuf byteBuf = encode(new PutRequestEncoder(), put);
+        // type(1) + uuid(16) + 字符串 "d"/"k"/"v" 各 (4+1) = 32
+        assertEquals(32, byteBuf.readableBytes());
+    }
+}
