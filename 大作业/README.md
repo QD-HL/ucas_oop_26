@@ -1,87 +1,77 @@
-# 大作业交付物索引 —— Ripple 3.3 网络带宽优化
+# Ripple 消息引擎网络带宽优化（选题 3.3）
 
-> 课程：面向对象程序设计（2026 秋）
-> 姓名 / 学号：钱翰林 / 2023K8009929010
-> 当前阶段：第 13 周（报告第二版 + 第二阶段全链路紧凑编码与自适应帧压缩实现）
+- **课程**：面向对象程序设计（2026 秋）
+- **姓名 / 学号**：钱翰林 / `2023K8009929010`
+- **基础项目**：[ISCAS-SSG/Ripple](https://github.com/ISCAS-SSG/Ripple)（提交基线 `468e9cb`）
 
 ---
 
-## 一、交付物
+## 1. 目录结构与交付物索引
 
-| 路径 | 内容 |
+| 路径 | 说明 |
 |---|---|
-| `报告/02-系统分析与设计报告-第二版.md` / `.pdf` | **系统分析与设计报告（第二版）**：方案迭代过程、面向对象设计（策略模式 `FrameCompressor` + 紧凑帧管线 + 原语扩展）、代码改动清单与全负载区间（4B ~ 8KiB）实测结果 |
-| `报告/01-系统分析与设计报告-初版.md` / `.pdf` | 系统分析与设计报告初版（第 8、9 周阶段，散文式成稿） |
-| `说明-仓库框架与改动.md` / `.pdf` | **仓库框架 + 第一/二阶段改动完整说明**（模块结构、核心对象、帧协议、两阶段代码改动对照、22 个单元测试、实测数据、复现步骤） |
-| `核心类图.png` | 核心类图（含报文家族、24 对编解码器与 `TypeHelper`、`CompactFrameEncoder/Decoder` 与 `FrameCompressor` 策略模式、`Overlay` 拓扑四层结构） |
-| `代码/ripple-common/.../helper/TypeHelper.java` | 线格式原语工具类（16B 二进制 UUID、VarInt/SVarInt/VarLong/SVarLong、紧凑时间戳、VarInt 长度前缀字符串、1B 操作类型枚举 Tag） |
-| `代码/ripple-common/.../tcp/FrameCompressor.java` | 帧级压缩策略接口 |
-| `代码/ripple-common/.../tcp/DeflateFrameCompressor.java` | 基于 JDK Deflate/Inflate 的压缩策略单例实现（含防压缩炸弹 `maxLength` 保护） |
-| `代码/ripple-common/.../tcp/CompactFrameEncoder.java` | 紧凑帧编码器：`VarInt((payloadLen << 1) \| compressedFlag)` 帧头 + 256B 阈值自适应压缩与不可压缩回退 |
-| `代码/ripple-common/.../tcp/CompactFrameDecoder.java` | 紧凑帧解码器：支持任意 TCP 分片/粘包的流式 VarInt 帧头解析与按需解压 |
-| `代码/ripple-common/.../tcp/CodecRoundTripTest.java` | 原语与报文编解码往返 + 尺寸契约回归测试（17 个用例） |
-| `代码/ripple-common/.../tcp/CompactFrameTest.java` | 紧凑帧头、大 JSON 自适应压缩、高熵数据回退、单字节分片粘包测试（4 个用例） |
-| `代码/ripple-common/.../tcp/BandwidthBenchmarkTest.java` | 基线 vs 第一版 vs 第二版全尺寸（4B / 1KiB / 8KiB）TCP 载荷大小基准测试（1 个用例） |
-| `证据/B3-实测结果-20261019.md` | 第一阶段集群抓包实测数据与出处说明（含 8 份 `.pcap` 原始抓包文件） |
-| `演示/Ripple-B3-第一次课堂研讨.pptx` / `.pdf` | 第一次课堂研讨 PPT（14 页）及讲稿、提词卡 |
+| `报告/02-系统分析与设计报告-第二版.md` / `.pdf` | **系统分析与设计报告（第二版）**：包含第一版问题复盘、字段级变长与枚举编码、紧凑帧头与阈值 Deflate 压缩、核心类设计和 24 项测试实测结果 |
+| `报告/01-系统分析与设计报告-初版.md` / `.pdf` | 系统分析与设计报告（第一版）：基于 UUID 16 字节二进制编码的初版分析与抓包验证 |
+| `核心类图.png` | 核心类图：展示报文继承层次、`TypeHelper` 与 24 对编解码器、`CompactFrameEncoder/Decoder` 与 `FrameCompressor` 接口以及同步拓扑层 |
+| `代码/` | 完整可编译 Maven 多模块工程（`ripple-common`、`ripple-server`、`ripple-client`） |
+| `演示/` | 第一次课堂研讨 PPT、导出 PDF 与配套讲稿 |
+| `证据/` | 三节点星形集群 `tcpdump` 原始抓包文件（8 份 `.pcap`）及数据复算说明 |
 
 ---
 
-## 二、第一版与第二版改动演进摘要
+## 2. 核心代码改动清单
 
-### 2.1 第一阶段（初版）
-- **定位瓶颈**：`TypeHelper.readUuid` / `writeUuid` 将 128 位 UUID 转为 36 字符 ASCII 字符串加 4 字节长度前缀（共 40 字节）。
-- **改动**：改为直接读写两个 8 字节 `long`（16 字节二进制），每个 UUID 固定省 24 字节，全仓 64 处调用点零改动。
-- **局限**：固定字节节省在大负载下被稀释（4B 值降 42.2%，1KiB 值仅降 5.9%，8KiB 值仅降 0.8%）。
+全部改动集中在线格式原语工具类 `TypeHelper`、Netty 帧编解码与压缩接口以及 8 对报文编解码器中，上层业务实体、拓扑路由与 SQLite 存储层接口保持不变：
 
-### 2.2 第二阶段（第二版）
-1. **字段级紧凑编码（`TypeHelper` + 8 对编解码器对称改造）**：
-   - 字符串长度前缀从 4 字节定长 `int` 改为 `VarInt`（短字符串长度前缀仅 1 字节，全仓 24 对编解码器自动生效）；
-   - `operationType`（`update` / `delete` / `incremental_update`）与 `atomicOperation`（`add_entry` / `remove_entry`）从完整字符串（10~22 字节）改为 1 字节枚举 Tag（未知值以 `0xFF` 标签自动回退为字符串）；
-   - 节点 ID（`lastUpdateServerId`、`fromId`、`sourceId`、`nodeId`）从 4 字节 `int` 改为 ZigZag `SVarInt`（常见节点号仅 1 字节）；端口号与列表项数改为 `VarInt`；
-   - 时间戳 `lastUpdate` 从 8 字节 `long` 改为 ZigZag `SVarLong`（现代毫秒时间戳占 6 字节）。
-2. **帧协议与策略模式自适应压缩（`CompactFrameEncoder/Decoder` + `FrameCompressor`）**：
-   - 替换 `ServerChannelInitializer` 与 `ClientChannelInitializer` 中固定的 4 字节 `LengthFieldBasedFrameDecoder` / `LengthFieldPrepender`；
-   - 帧头采用单个 `VarInt((payloadLength << 1) | compressedFlag)`，短包帧头从 4 字节缩至 1 字节；
-   - 引入策略模式接口 `FrameCompressor` 与默认实现 `DeflateFrameCompressor`，对 `>= 256` 字节的帧自适应试压缩（仅当压缩后更小时才置 `compressedFlag = 1`，高熵不可压缩数据自动回退）。
+| 文件路径 | 改动类型 | 内容说明 |
+|---|---|---|
+| `代码/ripple-common/.../helper/TypeHelper.java` | 修改 | `readUuid` / `writeUuid` 改为 16B 二进制；`readString` / `writeString` 长度前缀改为无符号 `VarInt`；新增 `VarInt`、`SVarInt`、`VarLong`、`SVarLong`、`Timestamp` 及 1B 枚举 `OperationType`、`AtomicOperation`（带 `0xFF` 未知值回退） |
+| `代码/ripple-common/.../tcp/FrameCompressor.java` | 新增 | 帧级载荷压缩接口，声明 `compress(byte[] raw)` 与 `decompress(byte[] compressed, int maxLength)` |
+| `代码/ripple-common/.../tcp/DeflateFrameCompressor.java` | 新增 | 默认 Deflate 压缩实现（单例 `INSTANCE`），支持解压输出上限校验 |
+| `代码/ripple-common/.../tcp/CompactFrameEncoder.java` | 新增 | 替换 `LengthFieldPrepender(4)`，采用单 `VarInt((payloadLen << 1) \| flag)` 帧头，对 `>= 256B` 的帧按需执行压缩与不可压缩回退 |
+| `代码/ripple-common/.../tcp/CompactFrameDecoder.java` | 新增 | 替换 `LengthFieldBasedFrameDecoder`，支持流式 VarInt 帧头探测、半包/粘包切分与按需解压 |
+| `代码/ripple-common/.../tcp/{encoder,decoder}/*`（7 对）<br>`代码/ripple-server/.../tcp/{encoder,decoder}/AckRequest*`（1 对） | 修改 | `SyncRequest`、`DispatchRequest`、`GetResponse`、`IncrementalUpdateRequest`、`SubscribeRequest`、`UnsubscribeRequest`、`GetClientListResponse`、`AckRequest` 切换至紧凑编码原语 |
+| `代码/ripple-server/.../tcp/ServerChannelInitializer.java`<br>`代码/ripple-client/.../tcp/ClientChannelInitializer.java` | 修改 | Netty 管线首部装配 `CompactFrameDecoder` 与 `CompactFrameEncoder` |
+| `代码/ripple-common/src/test/java/ripple/common/tcp/CodecRoundTripTest.java` | 新增 | 原语边界、枚举回退、8 类核心报文编解码往返与 7 种报文精确字节数契约（17 项测试） |
+| `代码/ripple-common/src/test/java/ripple/common/tcp/CompactFrameTest.java` | 新增 | 紧凑帧头、大包压缩、高熵随机数据不压缩回退、逐字节 TCP 拆包粘包重组测试（4 项测试） |
+| `代码/ripple-common/src/test/java/ripple/common/tcp/BandwidthBenchmarkTest.java` | 新增 | 单帧与不同负载大小对比、多客户端订阅扇出扩展（1/2/4/8 客户端）、1 Mbps 弱网编码与传输总耗时测试（3 项测试） |
 
 ---
 
-## 三、如何复现
+## 3. 编译与测试复现
 
-### 3.1 环境
-- WSL2 Ubuntu 24.04，OpenJDK 17，Maven 3.8.7
-- 代码目录：`D:\Q_Hanlin\UCAS\26_autumn\oop\大作业\代码`（WSL 下 `/mnt/d/Q_Hanlin/UCAS/26_autumn/oop/大作业/代码`）
-
-### 3.2 运行全部单元测试与带宽基准测试（共 22 个用例）
+环境要求：JDK 11+（实测环境为 OpenJDK 17）、Maven 3.8+。
 
 ```bash
-cd /mnt/d/Q_Hanlin/UCAS/26_autumn/oop/大作业/代码
+cd 大作业/代码
 mvn test
-# Tests run: 22, Failures: 0, Errors: 0, Skipped: 0
+# Results: Tests run: 24, Failures: 0, Errors: 0, Skipped: 0
 ```
-
-其中 `BandwidthBenchmarkTest` 会直接输出基线、第一版（P1）、第二版（P2）在各典型报文及负载下的线上字节数对比。
 
 ---
 
-## 四、关键实测结论
+## 4. 关键实测数据汇总
 
 ### 4.1 单帧含帧头 TCP 载荷字节数对比
 
-| 报文与负载 | 原始基线 | 第一版（P1） | 第二版（P2） | 第二版相比基线降幅 |
+| 报文与负载 | 原始基线 | 第一版（UUID 二进制） | 第二版（紧凑编码 + 自适应帧压缩） | 第二版相比基线降幅 |
 |---|---:|---:|---:|---:|
-| `HEARTBEAT_REQUEST` | 45 B | 21 B | **18 B** | **−60.0%** |
-| `SYNC_RESPONSE` | 46 B | 22 B | **19 B** | **−58.7%** |
-| `PUT_REQUEST`（4B 值） | 70 B | 46 B | **34 B** | **−51.4%** |
-| `SYNC_REQUEST`（4B 值） | 136 B | 88 B | **59 B** | **−56.6%** |
-| `SYNC_REQUEST`（~1 KiB JSON） | 1199 B | 1151 B | **222 B** | **−81.5%** |
-| `SYNC_REQUEST`（~8 KiB JSON） | 8356 B | 8308 B | **879 B** | **−89.5%** |
+| `HEARTBEAT_REQUEST` | 45 B | 21 B | 18 B | −60.0% |
+| `SYNC_RESPONSE` / `PUT_RESPONSE` | 46 B | 22 B | 19 B | −58.7% |
+| `PUT_REQUEST`（4B 值） | 70 B | 46 B | 34 B | −51.4% |
+| `SYNC_REQUEST`（update，4B 值） | 136 B | 88 B | 59 B | −56.6% |
+| `SYNC_REQUEST`（incremental，5B 值） | 201 B | 129 B | 76 B | −62.2% |
+| `SYNC_REQUEST`（~1 KiB JSON） | 1,199 B | 1,151 B | 222 B | −81.5% |
+| `SYNC_REQUEST`（~8 KiB JSON） | 8,356 B | 8,308 B | 879 B | −89.5% |
 
-### 4.2 三节点星形集群 606 帧标准工作负载对比
+### 4.2 三节点星形集群工作负载（80 次写入 / 606 帧）多维对比
 
-| 负载规模（606 帧） | 原始基线（TCP 载荷） | 第一版（TCP 载荷） | 第二版（TCP 载荷） |
+| 实验维度与场景 | 原始基线 | 第一版 | 第二版 |
 |---|---:|---:|---:|
-| 4 B 短配置值 | 48,791 B | 29,207 B（−40.1%） | **21,017 B（−56.9%）** |
-| ~1 KiB JSON 配置值 | 334,391 B | 314,807 B（−5.9%） | **56,537 B（−83.1%）** |
-| ~8 KiB JSON 配置值 | 2,341,431 B | 2,321,847 B（−0.8%） | **240,689 B（−89.7%）** |
+| 4B 短配置（1 客户端，606 帧总 TCP 载荷） | 48,791 B | 29,207 B（−40.1%） | 21,017 B（−56.9%） |
+| 4B 短配置（8 客户端订阅扇出，总 TCP 载荷） | 113,394 B | 68,274 B（−39.8%） | 48,737 B（−57.0%） |
+| ~1 KiB JSON（1 客户端，606 帧总 TCP 载荷） | 334,391 B | 314,807 B（−5.9%） | 56,537 B（−83.1%） |
+| ~1 KiB JSON（8 客户端订阅扇出，总 TCP 载荷） | 771,044 B | 734,820 B（−4.7%） | 141,307 B（−81.7%） |
+| ~8 KiB JSON（1 客户端，606 帧总 TCP 载荷） | 2,341,431 B | 2,321,847 B（−0.8%） | 240,689 B（−89.7%） |
+| ~1 KiB JSON 在 1 Mbps 弱网下总耗时（传输 + 编解码） | 2,675 ms | 2,518 ms（−5.9%） | 485 ms（−81.9%） |
+| ~8 KiB JSON 在 1 Mbps 弱网下总耗时（传输 + 编解码） | 18,731 ms | 18,575 ms（−0.8%） | 2,036 ms（−89.1%） |

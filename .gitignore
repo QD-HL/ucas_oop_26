@@ -1,0 +1,15 @@
+# 本地课程参考资料与辅助脚本（不纳入版本控制）
+课程资料/
+_tools/
+
+# Maven 编译产物与 IDE 配置
+**/target/
+.idea/
+*.iml
+.vscode/
+
+# 临时文件
+_check/
+_backup/
+**/~$*
+*.html
