@@ -28,7 +28,7 @@ public class IncrementalUpdateRequestEncoder implements Encoder {
         TypeHelper.writeString(incrementalUpdateRequest.getApplicationName(), byteBuf);
         TypeHelper.writeString(incrementalUpdateRequest.getKey(), byteBuf);
         TypeHelper.writeUuid(incrementalUpdateRequest.getBaseMessageUuid(), byteBuf);
-        TypeHelper.writeString(incrementalUpdateRequest.getAtomicOperation(), byteBuf);
+        TypeHelper.writeAtomicOperation(incrementalUpdateRequest.getAtomicOperation(), byteBuf);
         TypeHelper.writeString(incrementalUpdateRequest.getValue(), byteBuf);
     }
 }

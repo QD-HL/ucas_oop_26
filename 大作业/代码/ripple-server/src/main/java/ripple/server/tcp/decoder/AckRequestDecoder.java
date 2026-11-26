@@ -26,8 +26,8 @@ public class AckRequestDecoder implements Decoder {
         AckRequest ackRequest = new AckRequest();
         ackRequest.setUuid(TypeHelper.readUuid(byteBuf));
         ackRequest.setMessageUuid(TypeHelper.readUuid(byteBuf));
-        ackRequest.setSourceId(byteBuf.readInt());
-        ackRequest.setNodeId(byteBuf.readInt());
+        ackRequest.setSourceId(TypeHelper.readSVarInt(byteBuf));
+        ackRequest.setNodeId(TypeHelper.readSVarInt(byteBuf));
         return ackRequest;
     }
 }

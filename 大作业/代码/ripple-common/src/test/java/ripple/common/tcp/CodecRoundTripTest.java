@@ -44,17 +44,17 @@ import ripple.common.tcp.message.SyncRequest;
 import ripple.common.tcp.message.SyncResponse;
 import ripple.common.tcp.message.SystemInfoResponse;
 
+import java.util.Arrays;
 import java.util.Date;
 import java.util.UUID;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 /**
  * 编解码往返测试 + 线格式尺寸契约测试。
  *
- * <p>背景：本分支把 UUID 的线上表示从「4 字节长度前缀 + 36 字符 ASCII（40 字节）」
- * 改为「16 字节二进制」。这带来两个必须守住的性质：</p>
+ * <p>背景：本分支分阶段优化 Ripple 线格式：UUID 改为 16 字节二进制，字符串长度前缀改为 VarInt，
+ * operationType / atomicOperation 改为单字节枚举标签（未知值回退字符串）。这带来两个必须守住的性质：</p>
  * <ol>
  *   <li>编码后立即解码，所有字段必须原样还原（收发两端对称改动）；</li>
  *   <li>每条报文的线上字节数必须精确等于约定值（这是带宽收益的来源）。</li>
@@ -114,6 +114,83 @@ public class CodecRoundTripTest {
             assertEquals(sample, TypeHelper.readString(byteBuf));
             assertEquals(0, byteBuf.readableBytes());
         }
+    }
+
+    @Test
+    public void varIntEncodingRoundTripAndSizes() {
+        int[] values = {0, 1, 127, 128, 16383, 16384, Integer.MAX_VALUE};
+        int[] expectedSizes = {1, 1, 1, 2, 2, 3, 5};
+        for (int i = 0; i < values.length; i++) {
+            ByteBuf byteBuf = Unpooled.buffer();
+            TypeHelper.writeVarInt(values[i], byteBuf);
+            assertEquals("VarInt 字节数", expectedSizes[i], byteBuf.readableBytes());
+            assertEquals(values[i], TypeHelper.readVarInt(byteBuf));
+            assertEquals(0, byteBuf.readableBytes());
+        }
+    }
+
+    @Test
+    public void longStringVarIntLengthRoundTrip() {
+        char[] chars = new char[200];
+        Arrays.fill(chars, 'x');
+        String medium = new String(chars);
+
+        ByteBuf byteBuf = Unpooled.buffer();
+        TypeHelper.writeString(medium, byteBuf);
+        assertEquals(2 + 200, byteBuf.readableBytes());
+        assertEquals(medium, TypeHelper.readString(byteBuf));
+        assertEquals(0, byteBuf.readableBytes());
+    }
+
+    @Test
+    public void operationTypeAndAtomicOperationEncoding() {
+        String[] knownOps = {
+                Constants.MESSAGE_TYPE_UPDATE,
+                Constants.MESSAGE_TYPE_DELETE,
+                Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE
+        };
+        for (String op : knownOps) {
+            ByteBuf byteBuf = Unpooled.buffer();
+            TypeHelper.writeOperationType(op, byteBuf);
+            assertEquals("已知 operationType 必须只占 1 字节", 1, byteBuf.readableBytes());
+            assertEquals(op, TypeHelper.readOperationType(byteBuf));
+            assertEquals(0, byteBuf.readableBytes());
+        }
+
+        String[] knownAtomic = {
+                Constants.ATOMIC_OPERATION_ADD_ENTRY,
+                Constants.ATOMIC_OPERATION_REMOVE_ENTRY
+        };
+        for (String atomic : knownAtomic) {
+            ByteBuf byteBuf = Unpooled.buffer();
+            TypeHelper.writeAtomicOperation(atomic, byteBuf);
+            assertEquals("已知 atomicOperation 必须只占 1 字节", 1, byteBuf.readableBytes());
+            assertEquals(atomic, TypeHelper.readAtomicOperation(byteBuf));
+            assertEquals(0, byteBuf.readableBytes());
+        }
+
+        ByteBuf fallbackBuf = Unpooled.buffer();
+        TypeHelper.writeOperationType("custom_op", fallbackBuf);
+        assertEquals("未知 operationType 回退为 1B tag + VarInt(1) + 9B", 11, fallbackBuf.readableBytes());
+        assertEquals("custom_op", TypeHelper.readOperationType(fallbackBuf));
+        assertEquals(0, fallbackBuf.readableBytes());
+    }
+
+    @Test
+    public void signedVarIntAndTimestampRoundTrip() {
+        int[] ints = {0, 1, -1, 63, -64, 64, -65, Integer.MAX_VALUE, Integer.MIN_VALUE};
+        for (int v : ints) {
+            ByteBuf buf = Unpooled.buffer();
+            TypeHelper.writeSVarInt(v, buf);
+            assertEquals(v, TypeHelper.readSVarInt(buf));
+            assertEquals(0, buf.readableBytes());
+        }
+
+        ByteBuf tsBuf = Unpooled.buffer();
+        TypeHelper.writeTimestamp(LAST_UPDATE, tsBuf);
+        assertEquals("现代毫秒时间戳 ZigZag VarLong 应占 6 字节", 6, tsBuf.readableBytes());
+        assertEquals(LAST_UPDATE, TypeHelper.readTimestamp(tsBuf));
+        assertEquals(0, tsBuf.readableBytes());
     }
 
     // ------------------------------------------------------------------
@@ -268,19 +345,19 @@ public class CodecRoundTripTest {
     // ------------------------------------------------------------------
     // 3. 线格式尺寸契约（每次改动编码器都必须同步更新这里的数字）
     // ------------------------------------------------------------------
-    // 尺寸构成：type(1) + UUID(16) + 字符串(4+UTF-8 长度) + int(4) + long(8) + double(8) + byte(1)
+    // 尺寸构成：type(1) + UUID(16) + 字符串(VarInt 1~5 + UTF-8 长度) + 操作枚举(1) + int(4) + long(8) + double(8) + byte(1)
 
     @Test
     public void wireSizesMustMatchContract() {
-        // PUT_REQUEST: 1 + 16 + (4+4) + (4+5) + (4+5) = 43
+        // PUT_REQUEST: 1 + 16 + (1+4) + (1+5) + (1+5) = 34
         PutRequest put = new PutRequest();
         put.setUuid(UUID_A);
         put.setApplicationName("demo");
         put.setKey("hello");
         put.setValue("world");
-        assertEquals(43, encode(new PutRequestEncoder(), put).readableBytes());
+        assertEquals(34, encode(new PutRequestEncoder(), put).readableBytes());
 
-        // SYNC_REQUEST(update): 1 + 16*2 + (4+6) + (4+4) + (4+5) + (4+5) + 8 + 4 + 4 = 85
+        // SYNC_REQUEST(update): 1 + 16*2 + 1(op) + (1+4) + (1+5) + (1+5) + 6(ts) + 1(sid) + 1(fid) = 59
         SyncRequest sync = new SyncRequest();
         sync.setUuid(UUID_A);
         sync.setMessageUuid(UUID_B);
@@ -291,7 +368,22 @@ public class CodecRoundTripTest {
         sync.setLastUpdate(LAST_UPDATE);
         sync.setLastUpdateServerId(1);
         sync.setFromId(1);
-        assertEquals(85, encode(new SyncRequestEncoder(), sync).readableBytes());
+        assertEquals(59, encode(new SyncRequestEncoder(), sync).readableBytes());
+
+        // SYNC_REQUEST(incremental_update): 1 + 16*3 + 1(op) + (1+4) + (1+4) + 1(atomic) + (1+5) + 6 + 1 + 1 = 75
+        SyncRequest incSync = new SyncRequest();
+        incSync.setUuid(UUID_A);
+        incSync.setMessageUuid(UUID_B);
+        incSync.setOperationType(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE);
+        incSync.setApplicationName("demo");
+        incSync.setKey("list");
+        incSync.setBaseMessageUuid(UUID_A);
+        incSync.setAtomicOperation(Constants.ATOMIC_OPERATION_ADD_ENTRY);
+        incSync.setValue("entry");
+        incSync.setLastUpdate(LAST_UPDATE);
+        incSync.setLastUpdateServerId(1);
+        incSync.setFromId(1);
+        assertEquals(75, encode(new SyncRequestEncoder(), incSync).readableBytes());
 
         // HEARTBEAT_REQUEST: 1 + 16 = 17
         HeartbeatRequest heartbeat = new HeartbeatRequest();
@@ -304,14 +396,14 @@ public class CodecRoundTripTest {
         syncResponse.setResult(Result.SUCCESS);
         assertEquals(18, encode(new SyncResponseEncoder(), syncResponse).readableBytes());
 
-        // SUBSCRIBE_REQUEST: 1 + 16 + (4+4) + (4+5) + (4+9) + 4 = 51
+        // SUBSCRIBE_REQUEST: 1 + 16 + (1+4) + (1+5) + (1+9) + 2(port VarInt) = 40
         SubscribeRequest subscribe = new SubscribeRequest();
         subscribe.setUuid(UUID_A);
         subscribe.setApplicationName("demo");
         subscribe.setKey("hello");
         subscribe.setCallbackAddress("127.0.0.1");
         subscribe.setCallbackPort(5001);
-        assertEquals(51, encode(new SubscribeRequestEncoder(), subscribe).readableBytes());
+        assertEquals(40, encode(new SubscribeRequestEncoder(), subscribe).readableBytes());
 
         // SYSTEM_INFO_RESPONSE: 1 + 16 + 8 = 25
         SystemInfoResponse systemInfo = new SystemInfoResponse();
@@ -322,14 +414,14 @@ public class CodecRoundTripTest {
 
     @Test
     public void everyMessageMustCarryExactlyOneTypeByteAndSixteenByteUuids() {
-        // 兜底：任何报文编码后，UUID 部分都必须是 16 字节而不是 40 字节
+        // 兜底：任何报文编码后，UUID 部分都必须是 16 字节，短字符串长度前缀为 1 字节
         PutRequest put = new PutRequest();
         put.setUuid(UUID_A);
         put.setApplicationName("d");
         put.setKey("k");
         put.setValue("v");
         ByteBuf byteBuf = encode(new PutRequestEncoder(), put);
-        // type(1) + uuid(16) + 字符串 "d"/"k"/"v" 各 (4+1) = 32
-        assertEquals(32, byteBuf.readableBytes());
+        // type(1) + uuid(16) + 字符串 "d"/"k"/"v" 各 (1+1) = 23
+        assertEquals(23, byteBuf.readableBytes());
     }
 }

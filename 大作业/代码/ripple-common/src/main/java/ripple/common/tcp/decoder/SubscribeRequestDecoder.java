@@ -28,7 +28,7 @@ public class SubscribeRequestDecoder implements Decoder {
         subscribeRequest.setApplicationName(TypeHelper.readString(byteBuf));
         subscribeRequest.setKey(TypeHelper.readString(byteBuf));
         subscribeRequest.setCallbackAddress(TypeHelper.readString(byteBuf));
-        subscribeRequest.setCallbackPort(byteBuf.readInt());
+        subscribeRequest.setCallbackPort(TypeHelper.readVarInt(byteBuf));
         return subscribeRequest;
     }
 }

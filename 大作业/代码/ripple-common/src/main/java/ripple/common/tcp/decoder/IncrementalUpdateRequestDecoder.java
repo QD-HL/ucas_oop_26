@@ -28,7 +28,7 @@ public class IncrementalUpdateRequestDecoder implements Decoder {
         incrementalUpdateRequest.setApplicationName(TypeHelper.readString(byteBuf));
         incrementalUpdateRequest.setKey(TypeHelper.readString(byteBuf));
         incrementalUpdateRequest.setBaseMessageUuid(TypeHelper.readUuid(byteBuf));
-        incrementalUpdateRequest.setAtomicOperation(TypeHelper.readString(byteBuf));
+        incrementalUpdateRequest.setAtomicOperation(TypeHelper.readAtomicOperation(byteBuf));
         incrementalUpdateRequest.setValue(TypeHelper.readString(byteBuf));
         return incrementalUpdateRequest;
     }

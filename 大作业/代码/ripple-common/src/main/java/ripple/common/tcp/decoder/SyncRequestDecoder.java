@@ -29,19 +29,19 @@ public class SyncRequestDecoder implements Decoder {
         SyncRequest syncRequest = new SyncRequest();
         syncRequest.setUuid(TypeHelper.readUuid(byteBuf));
         syncRequest.setMessageUuid(TypeHelper.readUuid(byteBuf));
-        syncRequest.setOperationType(TypeHelper.readString(byteBuf));
+        syncRequest.setOperationType(TypeHelper.readOperationType(byteBuf));
         syncRequest.setApplicationName(TypeHelper.readString(byteBuf));
         syncRequest.setKey(TypeHelper.readString(byteBuf));
         if (syncRequest.getOperationType().equals(Constants.MESSAGE_TYPE_UPDATE)) {
             syncRequest.setValue(TypeHelper.readString(byteBuf));
         } else if (syncRequest.getOperationType().equals(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE)) {
             syncRequest.setBaseMessageUuid(TypeHelper.readUuid(byteBuf));
-            syncRequest.setAtomicOperation(TypeHelper.readString(byteBuf));
+            syncRequest.setAtomicOperation(TypeHelper.readAtomicOperation(byteBuf));
             syncRequest.setValue(TypeHelper.readString(byteBuf));
         }
-        syncRequest.setLastUpdate(new Date(byteBuf.readLong()));
-        syncRequest.setLastUpdateServerId(byteBuf.readInt());
-        syncRequest.setFromId(byteBuf.readInt());
+        syncRequest.setLastUpdate(TypeHelper.readTimestamp(byteBuf));
+        syncRequest.setLastUpdateServerId(TypeHelper.readSVarInt(byteBuf));
+        syncRequest.setFromId(TypeHelper.readSVarInt(byteBuf));
         return syncRequest;
     }
 }

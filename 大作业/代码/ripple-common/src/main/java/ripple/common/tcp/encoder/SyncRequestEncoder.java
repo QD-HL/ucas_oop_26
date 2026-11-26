@@ -27,18 +27,18 @@ public class SyncRequestEncoder implements Encoder {
         byteBuf.writeByte(syncRequest.getType().getValue());
         TypeHelper.writeUuid(syncRequest.getUuid(), byteBuf);
         TypeHelper.writeUuid(syncRequest.getMessageUuid(), byteBuf);
-        TypeHelper.writeString(syncRequest.getOperationType(), byteBuf);
+        TypeHelper.writeOperationType(syncRequest.getOperationType(), byteBuf);
         TypeHelper.writeString(syncRequest.getApplicationName(), byteBuf);
         TypeHelper.writeString(syncRequest.getKey(), byteBuf);
         if (syncRequest.getOperationType().equals(Constants.MESSAGE_TYPE_UPDATE)) {
             TypeHelper.writeString(syncRequest.getValue(), byteBuf);
         } else if (syncRequest.getOperationType().equals(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE)) {
             TypeHelper.writeUuid(syncRequest.getBaseMessageUuid(), byteBuf);
-            TypeHelper.writeString(syncRequest.getAtomicOperation(), byteBuf);
+            TypeHelper.writeAtomicOperation(syncRequest.getAtomicOperation(), byteBuf);
             TypeHelper.writeString(syncRequest.getValue(), byteBuf);
         }
-        byteBuf.writeLong(syncRequest.getLastUpdate().getTime());
-        byteBuf.writeInt(syncRequest.getLastUpdateServerId());
-        byteBuf.writeInt(syncRequest.getFromId());
+        TypeHelper.writeTimestamp(syncRequest.getLastUpdate(), byteBuf);
+        TypeHelper.writeSVarInt(syncRequest.getLastUpdateServerId(), byteBuf);
+        TypeHelper.writeSVarInt(syncRequest.getFromId(), byteBuf);
     }
 }

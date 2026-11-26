@@ -26,7 +26,7 @@ public class AckRequestEncoder implements Encoder {
         byteBuf.writeByte(ackRequest.getType().getValue());
         TypeHelper.writeUuid(ackRequest.getUuid(), byteBuf);
         TypeHelper.writeUuid(ackRequest.getMessageUuid(), byteBuf);
-        byteBuf.writeInt(ackRequest.getSourceId());
-        byteBuf.writeInt(ackRequest.getNodeId());
+        TypeHelper.writeSVarInt(ackRequest.getSourceId(), byteBuf);
+        TypeHelper.writeSVarInt(ackRequest.getNodeId(), byteBuf);
     }
 }

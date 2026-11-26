@@ -28,17 +28,17 @@ public class DispatchRequestEncoder implements Encoder {
         TypeHelper.writeUuid(dispatchRequest.getUuid(), byteBuf);
         TypeHelper.writeString(dispatchRequest.getClientListSignature(), byteBuf);
         TypeHelper.writeUuid(dispatchRequest.getMessageUuid(), byteBuf);
-        TypeHelper.writeString(dispatchRequest.getOperationType(), byteBuf);
+        TypeHelper.writeOperationType(dispatchRequest.getOperationType(), byteBuf);
         TypeHelper.writeString(dispatchRequest.getApplicationName(), byteBuf);
         TypeHelper.writeString(dispatchRequest.getKey(), byteBuf);
         if (dispatchRequest.getOperationType().equals(Constants.MESSAGE_TYPE_UPDATE)) {
             TypeHelper.writeString(dispatchRequest.getValue(), byteBuf);
         } else if (dispatchRequest.getOperationType().equals(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE)) {
             TypeHelper.writeUuid(dispatchRequest.getBaseMessageUuid(), byteBuf);
-            TypeHelper.writeString(dispatchRequest.getAtomicOperation(), byteBuf);
+            TypeHelper.writeAtomicOperation(dispatchRequest.getAtomicOperation(), byteBuf);
             TypeHelper.writeString(dispatchRequest.getValue(), byteBuf);
         }
-        byteBuf.writeLong(dispatchRequest.getLastUpdate().getTime());
-        byteBuf.writeInt(dispatchRequest.getLastUpdateServerId());
+        TypeHelper.writeTimestamp(dispatchRequest.getLastUpdate(), byteBuf);
+        TypeHelper.writeSVarInt(dispatchRequest.getLastUpdateServerId(), byteBuf);
     }
 }

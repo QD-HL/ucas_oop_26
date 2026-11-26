@@ -28,6 +28,6 @@ public class SubscribeRequestEncoder implements Encoder {
         TypeHelper.writeString(subscribeRequest.getApplicationName(), byteBuf);
         TypeHelper.writeString(subscribeRequest.getKey(), byteBuf);
         TypeHelper.writeString(subscribeRequest.getCallbackAddress(), byteBuf);
-        byteBuf.writeInt(subscribeRequest.getCallbackPort());
+        TypeHelper.writeVarInt(subscribeRequest.getCallbackPort(), byteBuf);
     }
 }

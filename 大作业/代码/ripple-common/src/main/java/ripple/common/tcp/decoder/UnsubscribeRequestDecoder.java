@@ -28,7 +28,7 @@ public class UnsubscribeRequestDecoder implements Decoder {
         unsubscribeRequest.setApplicationName(TypeHelper.readString(byteBuf));
         unsubscribeRequest.setKey(TypeHelper.readString(byteBuf));
         unsubscribeRequest.setCallbackAddress(TypeHelper.readString(byteBuf));
-        unsubscribeRequest.setCallbackPort(byteBuf.readInt());
+        unsubscribeRequest.setCallbackPort(TypeHelper.readVarInt(byteBuf));
         return unsubscribeRequest;
     }
 }

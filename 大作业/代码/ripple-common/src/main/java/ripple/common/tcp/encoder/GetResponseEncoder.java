@@ -31,23 +31,23 @@ public class GetResponseEncoder implements Encoder {
         TypeHelper.writeString(getResponse.getKey(), byteBuf);
         TypeHelper.writeString(getResponse.getValue(), byteBuf);
         int itemsCount = getResponse.getItems().size();
-        byteBuf.writeInt(itemsCount);
+        TypeHelper.writeVarInt(itemsCount, byteBuf);
         int i = 0;
         for (i = 0; i < itemsCount; i++) {
             GetResponseItem getResponseItem = getResponse.getItems().get(i);
             TypeHelper.writeUuid(getResponseItem.getMessageUuid(), byteBuf);
-            TypeHelper.writeString(getResponseItem.getOperationType(), byteBuf);
+            TypeHelper.writeOperationType(getResponseItem.getOperationType(), byteBuf);
             TypeHelper.writeString(getResponseItem.getApplicationName(), byteBuf);
             TypeHelper.writeString(getResponseItem.getKey(), byteBuf);
             if (getResponseItem.getOperationType().equals(Constants.MESSAGE_TYPE_UPDATE)) {
                 TypeHelper.writeString(getResponseItem.getValue(), byteBuf);
             } else if (getResponseItem.getOperationType().equals(Constants.MESSAGE_TYPE_INCREMENTAL_UPDATE)) {
                 TypeHelper.writeUuid(getResponseItem.getBaseMessageUuid(), byteBuf);
-                TypeHelper.writeString(getResponseItem.getAtomicOperation(), byteBuf);
+                TypeHelper.writeAtomicOperation(getResponseItem.getAtomicOperation(), byteBuf);
                 TypeHelper.writeString(getResponseItem.getValue(), byteBuf);
             }
-            byteBuf.writeLong(getResponseItem.getLastUpdate().getTime());
-            byteBuf.writeInt(getResponseItem.getLastUpdateServerId());
+            TypeHelper.writeTimestamp(getResponseItem.getLastUpdate(), byteBuf);
+            TypeHelper.writeSVarInt(getResponseItem.getLastUpdateServerId(), byteBuf);
         }
     }
 }

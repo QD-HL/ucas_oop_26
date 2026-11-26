@@ -30,12 +30,12 @@ public class GetClientListResponseDecoder implements Decoder {
         getClientListResponse.setUuid(TypeHelper.readUuid(byteBuf));
         getClientListResponse.setClientListSignature(TypeHelper.readString(byteBuf));
         getClientListResponse.setItems(new ArrayList<>());
-        int itemsCount = byteBuf.readInt();
+        int itemsCount = TypeHelper.readVarInt(byteBuf);
         int i = 0;
         for (i = 0; i < itemsCount; i++) {
             GetClientListResponseItem getClientListResponseItem = new GetClientListResponseItem();
             getClientListResponseItem.setAddress(TypeHelper.readString(byteBuf));
-            getClientListResponseItem.setPort(byteBuf.readInt());
+            getClientListResponseItem.setPort(TypeHelper.readVarInt(byteBuf));
             getClientListResponse.getItems().add(getClientListResponseItem);
         }
         return getClientListResponse;

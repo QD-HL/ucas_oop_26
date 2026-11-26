@@ -28,6 +28,6 @@ public class UnsubscribeRequestEncoder implements Encoder {
         TypeHelper.writeString(unsubscribeRequest.getApplicationName(), byteBuf);
         TypeHelper.writeString(unsubscribeRequest.getKey(), byteBuf);
         TypeHelper.writeString(unsubscribeRequest.getCallbackAddress(), byteBuf);
-        byteBuf.writeInt(unsubscribeRequest.getCallbackPort());
+        TypeHelper.writeVarInt(unsubscribeRequest.getCallbackPort(), byteBuf);
     }
 }

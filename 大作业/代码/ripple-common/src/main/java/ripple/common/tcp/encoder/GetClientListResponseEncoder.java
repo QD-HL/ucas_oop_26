@@ -28,12 +28,12 @@ public class GetClientListResponseEncoder implements Encoder {
         TypeHelper.writeUuid(getClientListResponse.getUuid(), byteBuf);
         TypeHelper.writeString(getClientListResponse.getClientListSignature(), byteBuf);
         int itemsCount = getClientListResponse.getItems().size();
-        byteBuf.writeInt(itemsCount);
+        TypeHelper.writeVarInt(itemsCount, byteBuf);
         int i = 0;
         for (i = 0; i < itemsCount; i++) {
             GetClientListResponseItem getClientListResponseItem = getClientListResponse.getItems().get(i);
             TypeHelper.writeString(getClientListResponseItem.getAddress(), byteBuf);
-            byteBuf.writeInt(getClientListResponseItem.getPort());
+            TypeHelper.writeVarInt(getClientListResponseItem.getPort(), byteBuf);
         }
     }
 }
